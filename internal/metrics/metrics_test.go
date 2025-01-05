@@ -7,63 +7,107 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestNewMetricsCollector(t *testing.T) {
-	collector := NewMetricsCollector()
-	assert.NotNil(t, collector)
+func TestMetrics(t *testing.T) {
+	metrics := GetMetrics()
+	assert.NotNil(t, metrics)
 }
 
-func TestRecordRequestDuration(t *testing.T) {
-	collector := NewMetricsCollector()
+func TestRecordRequest(t *testing.T) {
+	metrics := GetMetrics()
 
 	testCases := []struct {
 		name     string
-		path     string
 		duration time.Duration
+		success  bool
 	}{
 		{
-			name:     "normal request",
-			path:     "/api/v1/users",
+			name:     "successful request",
 			duration: 100 * time.Millisecond,
+			success:  true,
 		},
 		{
-			name:     "slow request",
-			path:     "/api/v1/posts",
+			name:     "failed request",
 			duration: 1 * time.Second,
+			success:  false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			collector.RecordRequestDuration(tc.path, tc.duration)
-			// Verify metrics were recorded correctly
-			stats := collector.GetStats()
-			assert.Contains(t, stats, tc.path)
+			metrics.RecordRequest(tc.duration, tc.success)
+
+			// Get snapshot and verify
+			snapshot := metrics.GetSnapshot()
+			assert.Greater(t, snapshot.TotalRequests, uint64(0))
+
+			if tc.success {
+				assert.Greater(t, snapshot.SuccessfulRequests, uint64(0))
+			} else {
+				assert.Greater(t, snapshot.FailedRequests, uint64(0))
+			}
+
+			// Verify response time metrics
+			assert.GreaterOrEqual(t, snapshot.MaxResponseTime, snapshot.MinResponseTime)
+			assert.GreaterOrEqual(t, snapshot.AverageResponseTime, snapshot.MinResponseTime)
+			assert.LessOrEqual(t, snapshot.AverageResponseTime, snapshot.MaxResponseTime)
 		})
 	}
 }
 
-func TestGetStats(t *testing.T) {
-	collector := NewMetricsCollector()
+func TestMetricsSnapshot(t *testing.T) {
+	metrics := GetMetrics()
 
 	// Record some test data
-	collector.RecordRequestDuration("/test", 100*time.Millisecond)
-	collector.RecordRequestDuration("/test", 200*time.Millisecond)
+	metrics.RecordRequest(100*time.Millisecond, true)
+	metrics.RecordRequest(200*time.Millisecond, true)
+	metrics.RecordRequest(300*time.Millisecond, false)
 
-	stats := collector.GetStats()
-	assert.NotEmpty(t, stats)
-	assert.Contains(t, stats, "/test")
+	snapshot := metrics.GetSnapshot()
+	assert.Equal(t, uint64(3), snapshot.TotalRequests)
+	assert.Equal(t, uint64(2), snapshot.SuccessfulRequests)
+	assert.Equal(t, uint64(1), snapshot.FailedRequests)
+	assert.Greater(t, snapshot.AverageResponseTime, float64(0))
+	assert.NotEqual(t, time.Time{}, snapshot.LastUpdated)
 }
 
-func TestMetricsReset(t *testing.T) {
-	collector := NewMetricsCollector()
+func TestRateLimitAndAuthFailures(t *testing.T) {
+	metrics := GetMetrics()
 
-	// Add some metrics
-	collector.RecordRequestDuration("/test", 100*time.Millisecond)
+	// Record rate limit and auth failures
+	metrics.RecordRateLimit()
+	metrics.RecordRateLimit()
+	metrics.RecordAuthFailure()
 
-	// Reset metrics
-	collector.Reset()
+	snapshot := metrics.GetSnapshot()
+	assert.Equal(t, uint64(2), snapshot.RateLimitExceeded)
+	assert.Equal(t, uint64(1), snapshot.AuthFailures)
+	assert.NotEqual(t, time.Time{}, snapshot.LastUpdated)
+}
 
-	// Verify metrics are cleared
-	stats := collector.GetStats()
-	assert.Empty(t, stats)
+func TestConcurrentAccess(t *testing.T) {
+	metrics := GetMetrics()
+	const numGoroutines = 10
+	const numOperations = 100
+
+	// Start multiple goroutines to test concurrent access
+	done := make(chan bool)
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			for j := 0; j < numOperations; j++ {
+				metrics.RecordRequest(time.Duration(j)*time.Millisecond, j%2 == 0)
+				metrics.GetSnapshot()
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Verify final state
+	snapshot := metrics.GetSnapshot()
+	assert.Equal(t, uint64(numGoroutines*numOperations), snapshot.TotalRequests)
+	assert.Equal(t, uint64(numGoroutines*numOperations/2), snapshot.SuccessfulRequests)
 }

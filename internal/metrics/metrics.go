@@ -29,6 +29,19 @@ type Metrics struct {
 	LastUpdated time.Time
 }
 
+// MetricsSnapshot represents a snapshot of metrics without mutex
+type MetricsSnapshot struct {
+	TotalRequests       uint64
+	SuccessfulRequests  uint64
+	FailedRequests      uint64
+	AverageResponseTime float64
+	MinResponseTime     float64
+	MaxResponseTime     float64
+	RateLimitExceeded   uint64
+	AuthFailures        uint64
+	LastUpdated         time.Time
+}
+
 var (
 	defaultMetrics *Metrics
 	once           sync.Once
@@ -87,9 +100,20 @@ func (m *Metrics) RecordAuthFailure() {
 	m.LastUpdated = time.Now()
 }
 
-// GetSnapshot returns a copy of the current metrics
-func (m *Metrics) GetSnapshot() Metrics {
+// GetSnapshot returns a copy of the current metrics without the mutex
+func (m *Metrics) GetSnapshot() MetricsSnapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return *m
+
+	return MetricsSnapshot{
+		TotalRequests:       m.TotalRequests,
+		SuccessfulRequests:  m.SuccessfulRequests,
+		FailedRequests:      m.FailedRequests,
+		AverageResponseTime: m.AverageResponseTime,
+		MinResponseTime:     m.MinResponseTime,
+		MaxResponseTime:     m.MaxResponseTime,
+		RateLimitExceeded:   m.RateLimitExceeded,
+		AuthFailures:        m.AuthFailures,
+		LastUpdated:         m.LastUpdated,
+	}
 }

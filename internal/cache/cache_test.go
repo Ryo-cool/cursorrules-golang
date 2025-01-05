@@ -32,14 +32,13 @@ func TestCacheOperations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cache := NewCache()
+			cache := New(Config{
+				MaxItems:        100,
+				CleanupInterval: time.Minute,
+			})
 
 			// Test Set
-			err := cache.Set(tt.key, tt.value, tt.ttl)
-			if err != nil {
-				t.Errorf("Set() error = %v", err)
-				return
-			}
+			cache.Set(tt.key, tt.value, tt.ttl)
 
 			// For expired key test, wait for expiration
 			if tt.wantErr {
@@ -47,9 +46,9 @@ func TestCacheOperations(t *testing.T) {
 			}
 
 			// Test Get
-			got, err := cache.Get(tt.key)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Get() error = %v, wantErr %v", err, tt.wantErr)
+			got, exists := cache.Get(tt.key)
+			if exists == tt.wantErr {
+				t.Errorf("Get() exists = %v, wantErr %v", exists, tt.wantErr)
 				return
 			}
 
@@ -61,21 +60,47 @@ func TestCacheOperations(t *testing.T) {
 }
 
 func TestCacheEviction(t *testing.T) {
-	cache := NewCache()
-	maxItems := 1000
+	maxItems := 5
+	cache := New(Config{
+		MaxItems:        maxItems,
+		CleanupInterval: time.Minute,
+	})
 
 	// Test cache eviction policy
-	for i := 0; i < maxItems+100; i++ {
+	for i := 0; i < maxItems+3; i++ {
 		key := fmt.Sprintf("key-%d", i)
-		err := cache.Set(key, i, time.Minute)
-		if err != nil {
-			t.Errorf("Set() error = %v", err)
-		}
+		cache.Set(key, i, time.Minute)
 	}
 
 	// Verify cache size doesn't exceed max capacity
-	if cache.Size() > maxItems {
-		t.Errorf("Cache size %d exceeds max capacity %d", cache.Size(), maxItems)
+	stats := cache.GetStats()
+	if stats["size"].(int) > maxItems {
+		t.Errorf("Cache size %d exceeds max capacity %d", stats["size"], maxItems)
+	}
+}
+
+func TestCacheStats(t *testing.T) {
+	cache := New(Config{
+		MaxItems:        100,
+		CleanupInterval: time.Minute,
+	})
+
+	// Add some items and perform operations
+	cache.Set("key1", "value1", time.Minute)
+	cache.Set("key2", "value2", time.Minute)
+
+	// Get existing and non-existing items
+	cache.Get("key1")
+	cache.Get("key2")
+	cache.Get("non-existent")
+
+	// Check stats
+	stats := cache.GetStats()
+	if stats["hit_count"].(uint64) != 2 {
+		t.Errorf("Expected hit count of 2, got %v", stats["hit_count"])
+	}
+	if stats["miss_count"].(uint64) != 1 {
+		t.Errorf("Expected miss count of 1, got %v", stats["miss_count"])
 	}
 }
 
